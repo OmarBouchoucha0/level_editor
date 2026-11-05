@@ -2,6 +2,7 @@
 #include <raylib.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #define SCALE 50.0f
 #define TILE_COUNT 60
@@ -14,12 +15,14 @@
 #define VELOCITY 300
 #define SCREEN_CENTER_X 16.0f * SCALE / 2.0f
 #define SCREEN_CENTER_Y 9.0f * SCALE / 2.0f
+#define ENTITY_VERSION 1
 
 typedef struct Entity Entity;
 struct Entity {
+  int version;
   Vector2 pos;
   Vector2 dimensions;
-  Texture2D texture;
+  int texture_id;
   bool focused;
   int stage;
 };
@@ -29,6 +32,30 @@ static int STAGE = 0;
 static int LAST_ENTITY_ID = 1;
 static Entity *FOCUSED_ENTITY;
 static Entity *COPIED_ENTITY;
+
+void saveEntities(char *filename, Entity *entities) {
+  FILE *f = fopen(filename, "wb");
+  if (!f) {
+    return;
+  }
+  size_t count;
+  count = LAST_ENTITY_ID;
+  fwrite(&count, sizeof(count), 1, f);
+  fwrite(entities, sizeof(Entity), count, f);
+  fclose(f);
+}
+
+void loadEntities(char *filename, Entity *entities) {
+  FILE *f = fopen(filename, "rb");
+  if (!f) {
+    return;
+  }
+  size_t count;
+  fread(&count, sizeof(count), 1, f);
+  LAST_ENTITY_ID = count;
+  fread(entities, sizeof(Entity), count, f);
+  fclose(f);
+}
 
 void addEntity(Entity *entities, Entity entity) {
   entities[LAST_ENTITY_ID] = entity;
@@ -64,8 +91,6 @@ void input(float dt, Entity *entities, Camera2D camera) {
           mouse_pos.y <= tile->pos.y + tile->dimensions.y) {
         tile->focused = true;
         FOCUSED_ENTITY = tile;
-      } else {
-        FOCUSED_ENTITY = NULL;
       }
     }
   }
@@ -85,13 +110,13 @@ void input(float dt, Entity *entities, Camera2D camera) {
     if (IsKeyPressed(KEY_C)) {
       COPIED_ENTITY = FOCUSED_ENTITY;
     }
-    if (IsKeyPressed(KEY_V)) {
+    if (IsKeyPressed(KEY_V) && COPIED_ENTITY != NULL) {
       Entity tile = {0};
       tile.pos = mouse_pos;
       tile.dimensions = COPIED_ENTITY->dimensions;
       tile.focused = true;
       tile.stage = STAGE;
-      tile.texture = COPIED_ENTITY->texture;
+      tile.texture_id = COPIED_ENTITY->texture_id;
       addEntity(entities, tile);
     }
   }
@@ -127,7 +152,7 @@ void loadTilesetTextures(Texture2D tileset[TILE_COUNT]) {
     snprintf(buffer, sizeof(buffer),
              "/home/omar/Work/game_level_editor/assets/Tiles/Tile_%ld.png",
              i + 1);
-    tileset[i] = LoadTexture(buffer);
+    tileset[i + 1] = LoadTexture(buffer);
   }
 }
 
@@ -161,13 +186,14 @@ void loadDebugTileset(Entity *entities, Texture2D tileset[TILE_COUNT]) {
   int col = 0;
   for (int i = 0; i < TILE_COUNT; ++i) {
     Entity tile = {0};
+    tile.version = ENTITY_VERSION;
     tile.pos.x = col * TILE_WIDTH;
     tile.pos.y = row * TILE_HEIGHT;
     tile.dimensions.x = TILE_WIDTH;
     tile.dimensions.y = TILE_HEIGHT;
     tile.focused = false;
     tile.stage = STAGE;
-    tile.texture = tileset[i];
+    tile.texture_id = i + 1;
     addEntity(entities, tile);
     row++;
     if (row >= HEIGHT_IN_TILES - 1) {
@@ -177,10 +203,10 @@ void loadDebugTileset(Entity *entities, Texture2D tileset[TILE_COUNT]) {
   }
 }
 
-void drawEntities(Entity *entities) {
+void drawEntities(Entity *entities, Texture2D tileset[TILE_COUNT]) {
   for (int i = 1; i < LAST_ENTITY_ID; ++i) {
     if (entities[i].stage == STAGE) {
-      DrawTextureV(entities[i].texture, entities[i].pos, WHITE);
+      DrawTextureV(tileset[entities[i].texture_id], entities[i].pos, WHITE);
     }
   }
 }
@@ -189,22 +215,27 @@ int main() {
   InitWindow(16 * SCALE, 9 * SCALE, "level editor");
   SetTargetFPS(60);
   SetMouseCursor(MOUSE_CURSOR_ARROW);
-  Texture2D tileset[TILE_COUNT];
+  Texture2D tileset[TILE_COUNT + 1];
   loadTilesetTextures(tileset);
   RenderTexture2D grid_texture = {0};
   buildDebugStageGridTexture(&grid_texture);
 
   Entity entities[MAX_ENTITIES];
   Entity player = {0};
+  player.version = ENTITY_VERSION;
   player.pos.x = SCREEN_CENTER_X;
   player.pos.y = SCREEN_CENTER_Y;
   player.dimensions.x = TILE_WIDTH;
   player.dimensions.y = TILE_HEIGHT;
   player.focused = false;
   player.stage = STAGE;
-  addEntity(entities, player);
-
-  loadDebugTileset(entities, tileset);
+  player.texture_id = 0;
+  if (FileExists("lvl.bin")) {
+    loadEntities("lvl.bin", entities);
+  } else {
+    addEntity(entities, player);
+    loadDebugTileset(entities, tileset);
+  }
 
   Camera2D camera = {0};
   camera.target =
@@ -227,7 +258,7 @@ int main() {
     ClearBackground(BLACK);
     BeginMode2D(camera);
     drawGrid(grid_texture);
-    drawEntities(entities);
+    drawEntities(entities, tileset);
     EndMode2D();
 
     snprintf(buffer, sizeof(buffer), "fps : %d", fps);
@@ -253,5 +284,7 @@ int main() {
     DrawText(buffer, 2, 40, 8, WHITE);
     EndDrawing();
   }
+  saveEntities("lvl.bin", entities);
+  CloseWindow();
   return 0;
 }
